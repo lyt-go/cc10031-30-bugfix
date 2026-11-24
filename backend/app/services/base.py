@@ -21,10 +21,14 @@ class BaseModuleService:
     MODULE = ""
     ENTITY = ""
     LIST_FIELDS: list[str] = []
+    # 由业务计算/轮询产生的派生字段：列表展示，但登记时不要求也不应当手填。
+    READONLY_FIELDS: list[str] = []
     REQUIRED_FIELDS: list[str] = []
     STATUS_ORDER: list[str] = []
     ACTION_RULES: dict[str, str] = {}
     NEGATIVE_ACTIONS: list[str] = []
+    # 可选：把动作映射到具体的领域方法，让「受理」和「确认」走不同口径。
+    ACTION_METHODS: dict[str, str] = {}
 
     # -- 基础 CRUD --
 
@@ -66,11 +70,25 @@ class BaseModuleService:
         rows = store.rows(self.MODULE)
         entry = {"id": max((int(row.get("id", 0)) for row in rows), default=0) + 1}
         entry.update({field: values.get(field) for field in self.LIST_FIELDS})
+        # 派生字段不接收手填值，保持为空等业务计算回填。
+        for field in self.READONLY_FIELDS:
+            entry[field] = ""
         entry["status"] = self.STATUS_ORDER[0]
         entry["pending"] = True
         entry["abnormal"] = False
         rows.append(entry)
         return entry, []
+
+    def _set_status(self, entry_id: int, action: str) -> dict[str, Any] | None:
+        """只做状态流转，供领域方法内部使用，避免经 run_action 再次分派。"""
+        entry = store.find(self.MODULE, entry_id)
+        target = self.ACTION_RULES.get(action)
+        if entry is None or target is None:
+            return entry
+        entry["status"] = target
+        entry["pending"] = target != self.STATUS_ORDER[-1]
+        entry["abnormal"] = action in self.NEGATIVE_ACTIONS
+        return entry
 
     def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
         entry = store.find(self.MODULE, entry_id)
@@ -79,6 +97,13 @@ class BaseModuleService:
         target = self.ACTION_RULES.get(action)
         if target is None:
             return None, f"动作「{action}」不属于{self.MODULE}可执行范围"
+        # 领域方法优先：它负责真正的业务计算，并在内部自行推进状态。
+        method_name = self.ACTION_METHODS.get(action)
+        if method_name:
+            result = getattr(self, method_name)(entry_id)
+            if isinstance(result, dict) and result.get("error"):
+                return None, str(result["error"])
+            return store.find(self.MODULE, entry_id), f"{self.ENTITY}已{action}"
         entry["status"] = target
         entry["pending"] = target != self.STATUS_ORDER[-1]
         entry["abnormal"] = action in self.NEGATIVE_ACTIONS
@@ -107,11 +132,21 @@ class BaseModuleService:
         _ensure_dir(p)
         return p
 
-    def _write_jsonl(self, filepath: Path, records: list[dict[str, Any]]) -> int:
-        """将记录列表按行写入 JSONL 文件，返回实际写入条数。"""
+    def _write_jsonl(
+        self,
+        filepath: Path,
+        records: list[dict[str, Any]],
+        *,
+        append: bool = True,
+    ) -> int:
+        """将记录列表按行写入 JSONL 文件，返回实际写入条数。
+
+        ``append=False`` 用于交付类产物：每次交付重写，避免相邻窗口切换时
+        残留上一份申请的外测点数据。
+        """
         _ensure_dir(filepath.parent)
         written = 0
-        with open(filepath, "a", encoding="utf-8") as f:
+        with open(filepath, "a" if append else "w", encoding="utf-8") as f:
             for rec in records:
                 f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
                 written += 1

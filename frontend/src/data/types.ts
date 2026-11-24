@@ -18,6 +18,8 @@ export type ModuleMeta = {
   actions: string[]
   actionTargets: Record<string, string>
   metrics: string[]
+  /** 由业务计算产生的只读字段：列表可见，登记表单不出现。 */
+  readonlyFields?: string[]
 }
 
 export type PageResult = {

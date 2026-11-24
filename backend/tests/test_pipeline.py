@@ -409,17 +409,22 @@ class TestQualityChain:
 
 
 class TestExportChain:
-    """链路9: 序列导出"""
+    """链路9: 序列导出——按申请测点与区间对账，不再整目录搬运。"""
 
     def test_export_from_downsample_and_rollup(self, setup_data_dir):
         from app.services.series_export import SeriesExportService
         from app.store import store
 
-        # 准备降采样和归并数据文件
+        # 归并产物带实际起止；隔了很远的降采样任务不属于本次申请。
+        rollup_data = [
+            {"point": "SENS-P9", "window_ref": f"ROLL-P9#{i+1}",
+             "actual_start": f"2026-09-01T10:0{i}:00",
+             "actual_end": f"2026-09-01T10:0{i+4}:00",
+             "rollup_value": 24.5, "metric": "均值", "record_count": 5}
+            for i in range(3)
+        ]
         ds_data = [{"point": "SENS-P9", "window_index": i, "aggregated_value": 24.0, "method": "均值"}
                    for i in range(5)]
-        rollup_data = [{"point": "SENS-P9", "window_start": i, "rollup_value": 24.5, "metric": "均值"}
-                       for i in range(3)]
 
         (setup_data_dir / "downsampled").mkdir(parents=True, exist_ok=True)
         (setup_data_dir / "rollup_windows").mkdir(parents=True, exist_ok=True)
@@ -438,10 +443,15 @@ class TestExportChain:
         })
         se_svc = SeriesExportService()
         result = se_svc.export_series(209)
-        assert result["records_exported"] == 8  # 5 + 3
+        # 只有该测点的 3 个归并窗口进入交付，降采样整窗记录不再被整目录夹带。
+        assert result["records_exported"] == 3
+        assert {item["point"] for item in result["deliveries"]} == {"SENS-P9"}
+        assert all(item["split_basis"] == "整窗聚合" for item in result["deliveries"])
+        assert result["summary"]["reconciled"] is True
         # 验证导出文件存在
         export_file = setup_data_dir / "exports" / "EXPORT-P9_export.jsonl"
         assert export_file.exists()
+        assert len(export_file.read_text(encoding="utf-8").strip().splitlines()) == 3
 
 
 class TestSnapshotChain:

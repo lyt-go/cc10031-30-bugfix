@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from app.router_support import call_domain_view
 from app.schemas import ActionPayload, ActionResult, EntryPayload, PageResult
 from app.services import service_for
 
@@ -96,3 +97,24 @@ def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResu
     service = require_service(module)
     entry, message = service.run_action(entry_id, payload.action.strip())
     return ActionResult(ok=entry is not None, message=message, entry=entry)
+
+
+@router.get("/{module}/{entry_id}/windows", response_model=dict)
+def window_detail(module: str, entry_id: int) -> dict[str, Any]:
+    """归并窗口的实际起止与纳入观测出处。"""
+    service = require_service(module)
+    return call_domain_view(service, "window_detail", entry_id)
+
+
+@router.get("/{module}/{entry_id}/delivery", response_model=dict)
+def delivery_detail(module: str, entry_id: int) -> dict[str, Any]:
+    """一次交付的对账视图：申请区间、交付记录与排除明细。"""
+    service = require_service(module)
+    return call_domain_view(service, "delivery_detail", entry_id)
+
+
+@router.get("/{module}/{entry_id}/exclusions", response_model=dict)
+def exclusion_detail(module: str, entry_id: int) -> dict[str, Any]:
+    """交付的排除对账：无关测点/完全超界/缺拆分依据分别计数。"""
+    service = require_service(module)
+    return call_domain_view(service, "exclusion_detail", entry_id)
